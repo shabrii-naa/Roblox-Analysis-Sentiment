@@ -1,0 +1,280 @@
+!pip install google-play-scrapper
+
+##Import Library
+import pandas as pd
+import numpy as np
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import datetime as dt
+import re
+import string
+import nltk
+nltk.download("punkt_tab")
+nltk.download("stopwords")
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+
+!pip install sastrawi
+from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
+from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
+
+from wordcloud import WordCloud
+
+#import pustaka pelabelan data
+import csv
+import requests
+from io import StringIO
+
+#import pustaka untuk ekstraksi fitur teks
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+
+#Import Library
+from sklearn.svm import SVC
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, accuracy_score
+from sklearn.model_selection import train_test_split
+
+## Import data from scrapping
+dataset_path = "roblox_scrapping.csv"
+roblox_df = pd.read_csv(dataset_path, on_bad_lines='skip', delimiter=';')
+
+##Preprocessing
+def cleaning_text(text):
+  "Membersikah teks dengan hapus mention, link, angka, dan tanda baca"
+  text = re.sub(r'@[A-Za-z0-9_]+', '', text) #Hapus mention
+  text = re.sub(r'#', '', text) #Hapus hastag
+  text = re.sub(r'RT :', '', text) #Hapus RT
+  text = re.sub(r'https?:\/\/\S+', '', text) #Hapus link
+  text = re.sub(r'\d+', '', text) #Hapus angka
+  text = text.translate(str.maketrans('', '', string.punctuation)) #Hapus tanda baca
+  return text
+
+def casefolding_text(text):
+  return text.lower()
+def tokenizing_text(text):
+  return word_tokenize(text)
+def stemming_text(text):
+  stemmer = factory.create_stemmer()
+  return ''.join([stemmer.stem(word) for word in text.split()])
+def to_sentence(words):
+  return ' '.join(words)
+
+roblox_df['clean_text'] = roblox_df['content'].fillna('').apply(cleaning_text)
+
+def filtering_text(text):
+  ##menghapus kata-kata yang tidak penting
+  stop_words = set(stopwords.words('indonesian') + stopwords.words('english'))
+  additional_stopwords = ['iya', 'yaa', 'gak', 'nya', 'na', 'sih', 'ku', 'di', 'gaa', 'loh', 'kah', 'woi', 'woii', 'woy']
+  stop_words.update(additional_stopwords)
+  return [word for word in text if word not in stop_words]
+
+new_roblox_df = roblox_df.copy()
+new_roblox_df['text_clean'] = new_roblox_df['content'].apply(cleaning_text)
+new_roblox_df['text_casefolding']= new_roblox_df['text_clean'].apply(casefolding_text)
+new_roblox_df['text_tokenizing'] = new_roblox_df['text_casefolding'].apply(tokenizing_text)
+new_roblox_df['text_filtering'] = new_roblox_df['text_tokenizing'].apply(filtering_text)
+new_roblox_df['text_final'] = new_roblox_df['text_filtering'].apply(to_sentence)
+
+##Pelabelan Dataset
+# Fungsi untuk memuat data lexicon positif dari GitHub
+def load_lexicon(url):
+    lexicon = dict()
+    response = requests.get(url)  # Mengirim permintaan HTTP untuk mendapatkan file CSV
+    if response.status_code == 200:
+        # Jika permintaan berhasil, membaca CSV
+        reader = csv.reader(StringIO(response.text), delimiter=',')
+        for row in reader:
+            lexicon[row[0]] = int(row[1])  # Menambahkan kata dan skornya ke dalam kamus
+    else:
+        print(f"Failed to fetch lexicon data from {url}")
+    return lexicon
+
+# Memuat lexicon positif
+lexicon_positive_url = 'https://raw.githubusercontent.com/angelmetanosaa/dataset/main/lexicon_positive.csv'
+lexicon_positive = load_lexicon(lexicon_positive_url)
+
+# Memuat lexicon negatif
+lexicon_negative_url = 'https://raw.githubusercontent.com/angelmetanosaa/dataset/main/lexicon_negative.csv'
+lexicon_negative = load_lexicon(lexicon_negative_url)
+
+# Menampilkan beberapa contoh data lexicon positif dan negatif
+print("Contoh kata positif:", list(lexicon_positive.items())[:5])  # Menampilkan 5 kata pertama
+print("Contoh kata negatif:", list(lexicon_negative.items())[:5])  # Menampilkan 5 kata pertama
+
+def sentiment_analysis_lexicon_indonesia(text):
+    """
+    Menganalisis sentimen teks berdasarkan lexicon positif dan negatif
+    Args:
+    - text: List kata-kata dari teks yang akan dianalisis
+
+    Returns:
+    - score: Skor sentimen dari teks
+    - polarity: Polaritas sentimen, 'positive', 'negative', atau 'neutral'
+    """
+    score = 0  # Inisialisasi skor sentimen ke 0
+
+    # Mengecek kata-kata positif dalam teks dan menambahkan skor
+    for word in text:
+        if word in lexicon_positive:
+            score += lexicon_positive[word]
+
+    # Mengecek kata-kata negatif dalam teks dan mengurangi skor
+    for word in text:
+        if word in lexicon_negative:
+            score += lexicon_negative[word]
+
+    # Menentukan polaritas berdasarkan skor
+    if score > 0:
+        polarity = 'positive'
+    elif score < 0:
+        polarity = 'negative'
+    else:
+        polarity = 'neutral'  # Jika skor sama dengan 0, berarti netral
+
+    return score, polarity
+
+results = new_roblox_df['text_filtering'].apply(sentiment_analysis_lexicon_indonesia)
+
+results = list(zip(*results))
+
+new_roblox_df['polarity_score'] = results[0]
+new_roblox_df['polarity'] = results[1]
+
+print(new_roblox_df['polarity'].value_counts())
+
+##Visualisai
+# Membuat objek gambar dan sumbu dengan ukuran 6x6 inci
+fig, ax = plt.subplots(figsize=(12, 6))
+# Mengambil jumlah data polaritas sentimen
+sentiment_counts = new_roblox_df['polarity'].value_counts()
+# Menentukan ukuran dan label pie chart
+sizes = sentiment_counts.values
+labels = sentiment_counts.index
+# Menyesuaikan jarak antar potongan (explode) secara proporsional
+explode = [0.1 if i == sentiment_counts.idxmax() else 0 for i in labels]
+# Menentukan warna untuk setiap sentimen agar lebih jelas
+colors = ['#ff6666','#66b3ff','#D3D3D3']
+# Membuat pie chart dengan label, warna, dan format yang lebih menarik
+ax.pie(
+    sizes, labels=labels, autopct='%1.1f%%', explode=explode,
+    colors=colors, textprops={'fontsize': 12}, shadow=True, startangle=140
+)
+# Menetapkan judul untuk pie chart
+ax.set_title('Sentiment Polarity on Review Data Roblox', fontsize=14, pad=20)
+# Menampilkan pie chart
+plt.show()
+
+# Visualisasi Data dengan Bar Chart
+plt.figure(figsize=(8, 6))
+colors = ['#ff6666', '#66b3ff', '#D3D3D3']
+sns.barplot(x=new_roblox_df['polarity'].value_counts().index,
+            y=new_roblox_df['polarity'].value_counts().values,
+            palette=colors)
+plt.xlabel("Sentiment Polarity", fontsize=14)
+plt.ylabel("Count", fontsize=14)
+plt.title("Sentiment Polarity Distribution for Roblox", fontsize=16)
+plt.show()
+
+# Visualisasikan kata-kata yang paling sering muncul menggunakan TF-IDF
+plt.figure(figsize=(12, 6))
+vectorizer = TfidfVectorizer()  # Membuat objek vectorizer untuk menghitung TF-IDF
+X = vectorizer.fit_transform(new_roblox_df['text_final'])  # Menggunakan 'text_final'
+tfidf_df = pd.DataFrame(X.toarray(), columns=vectorizer.get_feature_names_out())  # Konversi matriks ke dalam DataFrame
+tfidf_df = tfidf_df.sum().reset_index(name='jumlah')  # Menjumlahkan nilai TF-IDF per kata
+tfidf_df = tfidf_df.sort_values('jumlah', ascending=False).head(20)  # Urutkan berdasarkan frekuensi tertinggi
+sns.barplot(x='jumlah', y='index', data=tfidf_df, color='#ff6666') # Plot bar chart untuk 20 kata teratas
+plt.title('Kata-kata Paling Sering Muncul')
+plt.show()
+
+##Data Spitting dan ekstraksi Fitur
+
+# Ekstraksi fitur dengan TF-IDF + N-Gram (Unigram dan Bigram)
+tfidf = TfidfVectorizer(max_features=5000, min_df=17, max_df=0.8,
+ngram_range=(1, 3))
+X_tfidf = tfidf.fit_transform(X)
+# Konversi hasil ekstraksi fitur menjadi dataframe
+features_df_tfidf = pd.DataFrame(X_tfidf.toarray(),
+columns=tfidf.get_feature_names_out())
+# Bagi data menjadi data latih dan data uji untuk TF-IDF
+X_train_tfidf, X_test_tfidf, y_train, y_test = train_test_split(
+X_tfidf, y, test_size=0.2, random_state=42
+)
+# Tampilkan dimensi fitur hasil ekstraksi
+print("Dimensi fitur TF-IDF:")
+print("X_train_tfidf:", X_train_tfidf.shape)
+print("X_test_tfidf:", X_test_tfidf.shape)
+
+# Ekstraksi fitur dengan Bag of Words (BoW) + N-Gram (Unigram dan Bigram)
+bow_vectorizer = CountVectorizer(max_features=5000, stop_words='english',
+ngram_range=(1, 3))
+X_bow = bow_vectorizer.fit_transform(X)
+# Konversi hasil ekstraksi fitur menjadi dataframe
+features_df_bow = pd.DataFrame(X_bow.toarray(),
+columns=bow_vectorizer.get_feature_names_out())
+# Bagi data menjadi data latih dan data uji untuk BoW
+X_train_bow, X_test_bow, y_train, y_test = train_test_split(
+X_bow, y, test_size=0.2, random_state=42
+)
+# Tampilkan dimensi fitur hasil ekstraksi
+print("\nDimensi fitur Bag of Words (BoW):")
+print("X_train_bow:", X_train_bow.shape)
+print("X_test_bow:", X_test_bow.shape)
+
+##MODELLING
+#SVM dengan TF-IDF (80/20)
+# Membuat objek model Support Vector Machine (SVM)
+svm = SVC(kernel='linear', C=1)  # Kernel linear dengan C=1
+# Melatih model SVM pada data pelatihan (menggunakan fitur TF-IDF)
+svm.fit(X_train_tfidf, y_train)
+# Prediksi sentimen pada data pelatihan dan data uji
+y_pred_train_svm = svm.predict(X_train_tfidf)   # Prediksi pada data latih
+y_pred_test_svm = svm.predict(X_test_tfidf)     # Prediksi pada data uji
+# Evaluasi akurasi model SVM
+accuracy_train_svm = accuracy_score(y_train, y_pred_train_svm)  # Akurasi pada data latih
+accuracy_test_svm = accuracy_score(y_test, y_pred_test_svm)      # Akurasi pada data uji
+# Menampilkan akurasi untuk model SVM
+print('SVM - accuracy_train:', accuracy_train_svm)
+print('SVM - accuracy_test:', accuracy_test_svm)
+
+##SVM dengan BoW
+# Membuat objek model SVM
+svm_bow = SVC(kernel='linear', C=1.0, random_state=42)
+# Melatih model SVM pada data pelatihan (menggunakan fitur BoW)
+svm_bow.fit(X_train_bow, y_train)
+# Prediksi sentimen pada data pelatihan dan data uji
+y_pred_train_svm_bow = svm_bow.predict(X_train_bow)
+y_pred_test_svm_bow = svm_bow.predict(X_test_bow)
+# Evaluasi akurasi model SVM
+accuracy_train_svm_bow = accuracy_score(y_train,
+y_pred_train_svm_bow)
+accuracy_test_svm_bow = accuracy_score(y_test, y_pred_test_svm_bow)
+# Menampilkan hasil evaluasi
+print('SVM (BoW) - Accuracy Train:', accuracy_train_svm_bow)
+print('SVM (BoW) - Accuracy Test :', accuracy_test_svm_bow)
+
+##Interfence
+# Input kalimat baru dari pengguna
+kalimat_baru = input("Masukkan kalimat baru: ")
+
+# Melakukan preprocessing sesuai pipeline
+kalimat_baru_cleaned = cleaning_text(kalimat_baru)
+kalimat_baru_casefolded = casefolding_text(kalimat_baru_cleaned)
+kalimat_baru_tokenized = tokenizing_text(kalimat_baru_casefolded)
+kalimat_baru_filtered = filtering_text(kalimat_baru_tokenized)
+kalimat_baru_final = to_sentence(kalimat_baru_filtered)
+
+# Menggunakan objek tfidf yang sudah di-fit sebelumnya
+X_kalimat_baru_tfidf = tfidf.transform([kalimat_baru_final])
+
+# Melakukan prediksi
+prediksi_sentimen = svm.predict(X_kalimat_baru_tfidf)
+
+# Menampilkan hasil prediksi
+if prediksi_sentimen[0] == 'negative':
+    print("Sentimen kalimat baru adalah NEGATIF 😟")
+elif prediksi_sentimen[0] == 'positive':
+    print("Sentimen kalimat baru adalah POSITIF 😄")
+else:
+    print("Sentimen kalimat baru adalah NETRAL 🙂")
